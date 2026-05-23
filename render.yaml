@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: matin-payment-bot
+    env: node
+    buildCommand: npm install
+    startCommand: node bot.js
+    plan: free
