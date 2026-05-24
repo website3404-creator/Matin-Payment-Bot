@@ -6,9 +6,6 @@ const FIREBASE_URL = 'https://matin-topup-default-rtdb.asia-southeast1.firebased
 const PORT         = process.env.PORT || 10000;
 const RENDER_URL   = 'https://matin-payment-bot.onrender.com';
 
-// ══════════════════════════════════════
-// Set Webhook ពេល start
-// ══════════════════════════════════════
 function setWebhook() {
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${RENDER_URL}/webhook&drop_pending_updates=true`;
     https.get(url, (res) => {
@@ -18,50 +15,54 @@ function setWebhook() {
     }).on('error', e => console.error('Webhook error:', e.message));
 }
 
-// ══════════════════════════════════════
-// Parse ABA PayWay message
-// ══════════════════════════════════════
 function parseABAMessage(text) {
     if (!text) return null;
 
+    // ABA PayWay formats:
+    // EN: "$0.49 paid by NAME (*804) on May 24... APV: 730532"
+    // KH: "$0.49 ត្រូវបានបង់ដោយ NAME (*804) នៅថ្ងៃ... APV: 819648"
     const isABA =
-        text.includes('ត្រូវបានបង់') ||
-        text.includes('PayWay') ||
+        text.includes('paid by') ||
+        text.includes('ត្រូវបានបង់ដោយ') ||
         text.includes('ABA PAY') ||
-        text.includes('ABA') ||
         text.includes('APV:') ||
-        text.includes('បានទទួល') ||
-        text.includes('Received') ||
-        text.includes('KHQR');
+        text.includes('PayWay') ||
+        text.includes('ABA');
 
     if (!isABA) return null;
 
-    const amountMatch = text.match(/\$?([\d,]+\.?\d*)/);
+    // Extract amount: $0.49 or $1.00
+    const amountMatch = text.match(/\$([\d,]+\.?\d*)/);
     const amount = amountMatch ? parseFloat(amountMatch[1].replace(',', '')) : 0;
 
-    const senderMatch = text.match(/បង់ដោយ\s+([A-Z\s]+)\s+\(/) ||
-                        text.match(/From[:\s]+([^\n]+)/i);
-    const sender = senderMatch ? senderMatch[1].trim() : 'Unknown';
+    // Extract sender: "paid by NAME (*804)" or "បង់ដោយ NAME (*804)"
+    const senderEN = text.match(/paid by\s+([A-Z\s]+)\s+\(/i);
+    const senderKH = text.match(/បង់ដោយ\s+([^\(]+)\s+\(/);
+    const sender = senderEN ? senderEN[1].trim() :
+                   senderKH ? senderKH[1].trim() : 'Unknown';
 
+    // Extract APV
     const apvMatch = text.match(/APV[:\s]+(\d+)/);
     const reference = apvMatch ? 'APV' + apvMatch[1] : ('TXN' + Date.now());
 
-    console.log(`💰 Payment: $${amount} from ${sender} ref ${reference}`);
+    // Extract Trx ID
+    const trxMatch = text.match(/Trx\.?\s*ID[:\s]+(\d+)/i);
+    const trxId = trxMatch ? trxMatch[1] : '';
+
+    console.log(`💰 Payment: $${amount} from ${sender} | APV: ${reference} | Trx: ${trxId}`);
 
     return {
         amount,
         currency: 'USD',
         sender,
         reference,
+        trxId,
         timestamp: new Date().toISOString(),
         verified: true,
         raw: text.substring(0, 300)
     };
 }
 
-// ══════════════════════════════════════
-// Save to Firebase
-// ══════════════════════════════════════
 function saveToFirebase(payment) {
     const key = 'pay_' + Date.now();
     const data = JSON.stringify(payment);
@@ -90,9 +91,6 @@ function saveToFirebase(payment) {
     });
 }
 
-// ══════════════════════════════════════
-// HTTP Server — Webhook receiver
-// ══════════════════════════════════════
 const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/webhook') {
         let body = '';
@@ -103,10 +101,12 @@ const server = http.createServer(async (req, res) => {
                 const msg = update.message || update.channel_post;
                 if (msg) {
                     const text = msg.text || msg.caption || '';
-                    console.log(`📩 [${msg.chat.id}] ${text.substring(0, 100)}`);
+                    console.log(`📩 [${msg.chat.id}] "${text.substring(0, 120)}"`);
                     const payment = parseABAMessage(text);
                     if (payment) {
                         await saveToFirebase(payment);
+                    } else {
+                        console.log('⏭ Not ABA payment');
                     }
                 }
             } catch(e) {
@@ -122,8 +122,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`🌐 Server running on port ${PORT}`);
+    console.log(`🌐 Port ${PORT}`);
     console.log('✅ Matin Payment Bot started (Webhook mode)');
-    // Set webhook after 3s ដើម្បីឲ្យ server start មុន
     setTimeout(setWebhook, 3000);
 });
